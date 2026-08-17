@@ -46,6 +46,15 @@ type Profile = {
   bio: string | null;
   avatar_url: string | null;
 };
+type MapMarker = {
+  id: string;
+  content_type: "post" | "event";
+  category: Category | null;
+  longitude: number;
+  latitude: number;
+  title: string;
+  starts_at: string;
+};
 
 function App() {
   const [onboarded, setOnboarded] = useState(true);
@@ -61,15 +70,25 @@ function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [publishedPosts, setPublishedPosts] = useState<ContentItem[]>([]);
+  const [mapMarkers, setMapMarkers] = useState<ContentItem[]>([]);
 
   const content = useMemo(
     () =>
-      [...publishedPosts, ...demoContent].filter(
+      Array.from(
+        new Map(
+          [...publishedPosts, ...mapMarkers, ...demoContent].map((item) => [
+            item.id,
+            item,
+          ]),
+        ).values(),
+      ).filter(
         (item) =>
           (type === "all" || item.type === type) &&
-          (categories.length === 0 || categories.includes(item.category)),
+          (categories.length === 0 ||
+            item.type === "post" ||
+            categories.includes(item.category)),
       ),
-    [categories, publishedPosts, type],
+    [categories, mapMarkers, publishedPosts, type],
   );
 
   const requestLocation = async () => {
@@ -105,7 +124,42 @@ function App() {
     );
     return () => listener.subscription.unsubscribe();
   }, []);
-  const publishPost = async (caption: string, category: Category) => {
+  useEffect(() => {
+    if (!userCoordinate) return;
+    const [longitude, latitude] = userCoordinate;
+    const loadMarkers = async () => {
+      const { data, error } = await supabase.rpc("map_viewport", {
+        north: latitude + 0.12,
+        south: latitude - 0.12,
+        east: longitude + 0.16,
+        west: longitude - 0.16,
+        categories: null,
+        types: null,
+        max_results: 200,
+      });
+      if (error) return;
+      const markers = data as unknown as MapMarker[];
+      setMapMarkers(
+        markers.map((marker) => ({
+          id: marker.id,
+          type: marker.content_type,
+          category: marker.category ?? "other",
+          title: marker.title,
+          description: marker.title,
+          author: "@around",
+          locationName: "Nearby",
+          longitude: marker.longitude,
+          latitude: marker.latitude,
+          distanceM: 0,
+          createdAt: marker.starts_at,
+          likes: 0,
+          comments: 0,
+        })),
+      );
+    };
+    void loadMarkers();
+  }, [userCoordinate]);
+  const publishPost = async (caption: string) => {
     if (!session) throw new Error("Please sign in before publishing.");
     if (!userCoordinate)
       throw new Error("Choose your location on the map before publishing.");
@@ -115,7 +169,6 @@ function App() {
       .insert({
         user_id: session.user.id,
         caption,
-        category,
         location: point,
         public_location: point,
         location_name: "Current location",
@@ -129,11 +182,13 @@ function App() {
       {
         id: created.id,
         type: "post",
-        category,
+        category: "other",
         title: caption,
         description: caption,
         author: "@you",
         locationName: "Current location",
+        longitude: userCoordinate[0],
+        latitude: userCoordinate[1],
         distanceM: 0,
         createdAt: created.created_at,
         likes: 0,
@@ -186,8 +241,8 @@ function App() {
             userId={session?.user.id ?? null}
             userCoordinate={userCoordinate}
             onBack={() => setCreateKind(null)}
-            onPublish={async (caption, category) => {
-              await publishPost(caption, category);
+            onPublish={async (caption) => {
+              await publishPost(caption);
               setCreateKind(null);
               setTab("Map");
               Alert.alert("Published", "Your post is now live around you.");
@@ -331,23 +386,6 @@ function MapScreen(props: {
             <Text>☷</Text>
           </Pressable>
         </View>
-        {items.map((item, index) => (
-          <Pressable
-            key={item.id}
-            onPress={() => onSelect(item)}
-            style={[
-              styles.marker,
-              {
-                left: `${14 + ((index * 21) % 70)}%`,
-                top: `${29 + ((index * 17) % 48)}%`,
-              },
-            ]}
-          >
-            <Text style={styles.markerText}>
-              {item.type === "event" ? "◈" : CATEGORIES[item.category].icon}
-            </Text>
-          </Pressable>
-        ))}
         <Pressable style={styles.recenter} onPress={onLocation}>
           <Text>{locationAllowed ? "◎" : "⌖"}</Text>
         </Pressable>
@@ -358,16 +396,6 @@ function MapScreen(props: {
             </Text>
           </View>
         )}
-      </View>
-      <View style={styles.nearby}>
-        <View>
-          <Text style={styles.sectionTitle}>Nearby now</Text>
-          <Text style={styles.muted}>
-            {items.filter((x) => x.type === "post").length} live posts ·{" "}
-            {items.filter((x) => x.type === "event").length} events
-          </Text>
-        </View>
-        <Text style={styles.chevron}>⌃</Text>
       </View>
       <Modal visible={filterOpen} transparent animationType="slide">
         <Pressable style={styles.backdrop} onPress={() => setFilterOpen(false)}>
@@ -617,17 +645,16 @@ function PostCreateScreen({
   userId: string | null;
   userCoordinate: Coordinate | null;
   onBack: () => void;
-  onPublish: (caption: string, category: Category) => Promise<void>;
+  onPublish: (caption: string) => Promise<void>;
 }) {
   const [caption, setCaption] = useState("");
-  const [category, setCategory] = useState<Category>("other");
   const [saving, setSaving] = useState(false);
   if (!userId) return <AuthGate onBack={onBack} />;
   const publish = async () => {
     if (!caption.trim()) return;
     setSaving(true);
     try {
-      await onPublish(caption.trim(), category);
+      await onPublish(caption.trim());
     } catch (error) {
       Alert.alert(
         "Could not publish",
@@ -651,17 +678,6 @@ function PostCreateScreen({
         style={[styles.input, styles.textarea]}
         multiline
       />
-      <Text style={styles.fieldLabel}>CATEGORY</Text>
-      <View style={styles.chips}>
-        {(Object.keys(CATEGORIES) as Category[]).map((value) => (
-          <Chip
-            key={value}
-            label={`${CATEGORIES[value].icon} ${CATEGORIES[value].label}`}
-            active={category === value}
-            onPress={() => setCategory(value)}
-          />
-        ))}
-      </View>
       <View style={styles.locationPicker}>
         <Text style={styles.fieldLabel}>LOCATION</Text>
         <Text style={styles.locationSelected}>
@@ -1359,15 +1375,40 @@ const styles = StyleSheet.create({
   },
   permissionText: { color: "#fff", fontSize: 12 },
   nearby: {
-    padding: 18,
     paddingBottom: 91,
     backgroundColor: "#fff",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
     borderTopLeftRadius: 25,
     borderTopRightRadius: 25,
   },
+  nearbyExpanded: { minHeight: 260 },
+  nearbyHeader: {
+    width: "100%",
+    paddingHorizontal: 18,
+    paddingTop: 4,
+    paddingBottom: 15,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  nearbyList: { paddingHorizontal: 18, gap: 4 },
+  nearbyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderColor: colors.line,
+  },
+  nearbyPin: {
+    height: 32,
+    width: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.pale,
+  },
+  nearbyCopy: { flex: 1 },
+  nearbyTitle: { color: colors.ink, fontWeight: "800", marginBottom: 3 },
   sectionTitle: {
     fontSize: 19,
     fontWeight: "800",
@@ -1672,7 +1713,12 @@ const styles = StyleSheet.create({
   },
   sheetTitle: { fontSize: 24, color: colors.ink, fontWeight: "800" },
   formError: { color: colors.coral, fontSize: 12, marginTop: 8 },
-  formNotice: { color: colors.accent, fontSize: 13, lineHeight: 19, marginTop: 14 },
+  formNotice: {
+    color: colors.accent,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 14,
+  },
 });
 
 export default function Root() {
