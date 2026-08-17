@@ -107,7 +107,7 @@ export function MapSurface({
           id="clusters"
           filter={["has", "point_count"]}
           style={{
-            circleColor: "#256c4d",
+            circleColor: "#e81e4c",
             circleRadius: 20,
             circleStrokeColor: "#fff",
             circleStrokeWidth: 2,
@@ -126,7 +126,7 @@ export function MapSurface({
           id="points"
           filter={["!", ["has", "point_count"]]}
           style={{
-            circleColor: "#256c4d",
+            circleColor: "#e81e4c",
             circleRadius: 9,
             circleStrokeColor: "#fff",
             circleStrokeWidth: 2,

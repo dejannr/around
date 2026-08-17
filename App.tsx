@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -24,14 +25,14 @@ import { UntitledIcon } from "./src/components/UntitledIcon";
 
 const queryClient = new QueryClient();
 const colors = {
-  ink: "#15231d",
-  muted: "#6b776f",
-  paper: "#fbfcf9",
+  ink: "#24191d",
+  muted: "#75666c",
+  paper: "#fffafb",
   surface: "#ffffff",
-  line: "#e5eae5",
-  accent: "#256c4d",
-  pale: "#e7f4eb",
-  coral: "#e66b4d",
+  line: "#f0e3e7",
+  accent: "#e81e4c",
+  pale: "#fff0f4",
+  coral: "#e81e4c",
 };
 type Tab = "Map" | "Feed" | "Create" | "Explore" | "Profile";
 type Coordinate = [longitude: number, latitude: number];
@@ -342,6 +343,14 @@ function MapScreen(props: {
           showUserLocation={locationAllowed === true}
           userCoordinate={userCoordinate}
         />
+        <View pointerEvents="none" style={styles.mapWordmarkWrap}>
+          <Image
+            source={require("./assets/around-wordmark.png")}
+            style={styles.mapWordmark}
+            resizeMode="contain"
+            tintColor={colors.accent}
+          />
+        </View>
         <Pressable style={styles.recenter} onPress={onLocation}>
           <UntitledIcon name="navigation" size={22} color="#1A73E8" />
         </Pressable>
@@ -1195,6 +1204,14 @@ const styles = StyleSheet.create({
   textButton: { alignItems: "center", padding: 18 },
   textButtonLabel: { color: colors.muted, fontWeight: "700" },
   mapCanvas: { flex: 1, backgroundColor: "#dce8dc", overflow: "hidden" },
+  mapWordmarkWrap: {
+    position: "absolute",
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  mapWordmark: { width: 164, height: 55 },
   mapGrid: {
     ...StyleSheet.absoluteFill,
     opacity: 0.38,
@@ -1331,7 +1348,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  navItemActive: { backgroundColor: "rgba(37,108,77,0.14)" },
+  navItemActive: { backgroundColor: "rgba(232,30,76,0.13)" },
   navLabel: {
     fontSize: 10,
     color: colors.muted,
