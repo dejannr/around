@@ -1,0 +1,26 @@
+import { useEffect, useMemo } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import type { ContentItem } from '../../data/demo';
+
+type Props = { items: ContentItem[]; onSelect: (item: ContentItem) => void };
+const token = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN;
+// Keep demo mode compatible with Expo Go. The native module is loaded only in a
+// development build after a Mapbox token has been configured.
+const Mapbox = token ? (require('@rnmapbox/maps').default as typeof import('@rnmapbox/maps').default) : null;
+if (token && Mapbox) Mapbox.setAccessToken(token);
+
+// Uses a single clustered ShapeSource rather than React marker components.
+export function MapSurface({ items, onSelect }: Props) {
+  const points = useMemo(() => ({ type: 'FeatureCollection' as const, features: items.map((item, index) => ({ type: 'Feature' as const, properties: { id: item.id, contentType: item.type }, geometry: { type: 'Point' as const, coordinates: [20.45 + (index % 4) * .012, 44.80 + Math.floor(index / 4) * .009] } })) }), [items]);
+  useEffect(() => { if (token && Mapbox) Mapbox.setAccessToken(token); }, []);
+  if (!token || !Mapbox) return <View style={styles.fallback}><View style={styles.grid} /><Text style={styles.fallbackText}>Add a Mapbox public token to enable the live map</Text></View>;
+  return <Mapbox.MapView style={StyleSheet.absoluteFill} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} attributionEnabled={false}>
+    <Mapbox.Camera defaultSettings={{ centerCoordinate: [20.4573, 44.8176], zoomLevel: 12 }} />
+    <Mapbox.ShapeSource id="around-content" shape={points} cluster clusterRadius={48} onPress={(event) => { const id = event.features[0]?.properties?.id; const match = items.find((item) => item.id === id); if (match) onSelect(match); }}>
+      <Mapbox.CircleLayer id="clusters" filter={['has', 'point_count']} style={{ circleColor: '#256c4d', circleRadius: 20, circleStrokeColor: '#fff', circleStrokeWidth: 2 }} />
+      <Mapbox.SymbolLayer id="cluster-count" filter={['has', 'point_count']} style={{ textField: ['get', 'point_count_abbreviated'], textSize: 12, textColor: '#ffffff' }} />
+      <Mapbox.CircleLayer id="points" filter={['!', ['has', 'point_count']]} style={{ circleColor: '#256c4d', circleRadius: 9, circleStrokeColor: '#fff', circleStrokeWidth: 2 }} />
+    </Mapbox.ShapeSource>
+  </Mapbox.MapView>;
+}
+const styles = StyleSheet.create({ fallback: { ...StyleSheet.absoluteFill, backgroundColor: '#dce8dc', overflow: 'hidden' }, grid: { ...StyleSheet.absoluteFill, opacity: .4, backgroundColor: '#c5d8c5', borderWidth: 1, borderColor: '#afc6af' }, fallbackText: { alignSelf: 'center', marginTop: '60%', color: '#527057', fontSize: 12, textAlign: 'center', paddingHorizontal: 55 } });
