@@ -59,6 +59,8 @@ export function MapSurface({
     <Mapbox.MapView
       style={StyleSheet.absoluteFill}
       styleURL={Mapbox.StyleURL.Street}
+      zoomEnabled
+      scrollEnabled
       logoEnabled={false}
       attributionEnabled={false}
     >
@@ -68,6 +70,9 @@ export function MapSurface({
         zoomLevel={userCoordinate ? 14 : 12}
       />
       {showUserLocation && <Mapbox.UserLocation visible />}
+      <Mapbox.Images
+        images={{ aroundPin: require("../../../assets/around-map-pin.png") }}
+      />
       <Mapbox.ShapeSource
         id="around-content"
         shape={points}
@@ -122,14 +127,15 @@ export function MapSurface({
             textColor: "#ffffff",
           }}
         />
-        <Mapbox.CircleLayer
+        <Mapbox.SymbolLayer
           id="points"
           filter={["!", ["has", "point_count"]]}
           style={{
-            circleColor: "#e81e4c",
-            circleRadius: 9,
-            circleStrokeColor: "#fff",
-            circleStrokeWidth: 2,
+            iconImage: "aroundPin",
+            iconSize: 0.72,
+            iconAnchor: "bottom",
+            iconAllowOverlap: true,
+            iconIgnorePlacement: true,
           }}
         />
       </Mapbox.ShapeSource>
