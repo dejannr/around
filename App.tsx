@@ -1,12 +1,12 @@
 import { StatusBar } from "expo-status-bar";
+import { BlurView } from "expo-blur";
 import * as Location from "expo-location";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
-  Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -16,16 +16,11 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Session } from "@supabase/supabase-js";
 
-import {
-  CATEGORIES,
-  demoContent,
-  type Category,
-  type ContentItem,
-  type ContentType,
-} from "./src/data/demo";
+import { demoContent, type Category, type ContentItem } from "./src/data/demo";
 import { eventStatus, formatDistance, relativeTime } from "./src/lib/content";
 import { MapSurface } from "./src/features/map/MapSurface";
 import { supabase } from "./src/lib/supabase";
+import { UntitledIcon } from "./src/components/UntitledIcon";
 
 const queryClient = new QueryClient();
 const colors = {
@@ -62,8 +57,6 @@ function App() {
   const [locationAllowed, setLocationAllowed] = useState<boolean | null>(null);
   const [userCoordinate, setUserCoordinate] = useState<Coordinate | null>(null);
   const [selected, setSelected] = useState<ContentItem | null>(null);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [type, setType] = useState<ContentType | "all">("all");
   const [liked, setLiked] = useState<Set<string>>(new Set());
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [createKind, setCreateKind] = useState<"post" | "event" | null>(null);
@@ -81,14 +74,8 @@ function App() {
             item,
           ]),
         ).values(),
-      ).filter(
-        (item) =>
-          (type === "all" || item.type === type) &&
-          (categories.length === 0 ||
-            item.type === "post" ||
-            categories.includes(item.category)),
       ),
-    [categories, mapMarkers, publishedPosts, type],
+    [mapMarkers, publishedPosts],
   );
 
   const requestLocation = async () => {
@@ -210,7 +197,7 @@ function App() {
   if (!onboarded) return <Onboarding onDone={() => setOnboarded(true)} />;
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView edges={["top"]} style={styles.safe}>
       {tab === "Map" && (
         <MapScreen
           items={content}
@@ -219,10 +206,6 @@ function App() {
           onLocation={requestLocation}
           locationAllowed={locationAllowed}
           userCoordinate={userCoordinate}
-          categories={categories}
-          setCategories={setCategories}
-          type={type}
-          setType={setType}
         />
       )}
       {tab === "Feed" && (
@@ -306,7 +289,7 @@ function Onboarding({ onDone }: { onDone: () => void }) {
     ["Explore. Share. Follow.", "Be part of what makes your city feel alive."],
   ];
   return (
-    <SafeAreaView style={[styles.safe, styles.onboard]}>
+    <SafeAreaView edges={["top"]} style={[styles.safe, styles.onboard]}>
       <View style={styles.logo}>
         <Text style={styles.logoMark}>◉</Text>
         <Text style={styles.logoType}>around</Text>
@@ -342,10 +325,6 @@ function MapScreen(props: {
   onLocation: () => void;
   locationAllowed: boolean | null;
   userCoordinate: Coordinate | null;
-  categories: Category[];
-  setCategories: (c: Category[]) => void;
-  type: ContentType | "all";
-  setType: (t: ContentType | "all") => void;
 }) {
   const {
     items,
@@ -353,18 +332,7 @@ function MapScreen(props: {
     onLocation,
     locationAllowed,
     userCoordinate,
-    categories,
-    setCategories,
-    type,
-    setType,
   } = props;
-  const [filterOpen, setFilterOpen] = useState(false);
-  const toggleCategory = (category: Category) =>
-    setCategories(
-      categories.includes(category)
-        ? categories.filter((c) => c !== category)
-        : [...categories, category],
-    );
   return (
     <View style={styles.page}>
       <View style={styles.mapCanvas}>
@@ -374,20 +342,8 @@ function MapScreen(props: {
           showUserLocation={locationAllowed === true}
           userCoordinate={userCoordinate}
         />
-        <View style={styles.mapHeader}>
-          <View style={styles.search}>
-            <Text>⌕</Text>
-            <Text style={styles.searchText}>Search Around</Text>
-          </View>
-          <Pressable
-            style={styles.iconButton}
-            onPress={() => setFilterOpen(true)}
-          >
-            <Text>☷</Text>
-          </Pressable>
-        </View>
         <Pressable style={styles.recenter} onPress={onLocation}>
-          <Text>{locationAllowed ? "◎" : "⌖"}</Text>
+          <UntitledIcon name="navigation" size={22} color="#1A73E8" />
         </Pressable>
         {locationAllowed === false && (
           <View style={styles.permission}>
@@ -397,50 +353,6 @@ function MapScreen(props: {
           </View>
         )}
       </View>
-      <Modal visible={filterOpen} transparent animationType="slide">
-        <Pressable style={styles.backdrop} onPress={() => setFilterOpen(false)}>
-          <Pressable
-            style={styles.filterSheet}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <Text style={styles.sheetTitle}>Filter map</Text>
-            <Text style={styles.fieldLabel}>CONTENT TYPE</Text>
-            <View style={styles.chips}>
-              {(["all", "post", "event"] as const).map((value) => (
-                <Chip
-                  key={value}
-                  label={
-                    value === "all"
-                      ? "All"
-                      : value === "post"
-                        ? "Posts"
-                        : "Events"
-                  }
-                  active={type === value}
-                  onPress={() => setType(value)}
-                />
-              ))}
-            </View>
-            <Text style={styles.fieldLabel}>CATEGORIES</Text>
-            <View style={styles.chips}>
-              {(Object.keys(CATEGORIES) as Category[]).map((c) => (
-                <Chip
-                  key={c}
-                  label={`${CATEGORIES[c].icon} ${CATEGORIES[c].label}`}
-                  active={categories.includes(c)}
-                  onPress={() => toggleCategory(c)}
-                />
-              ))}
-            </View>
-            <Pressable
-              style={styles.primary}
-              onPress={() => setFilterOpen(false)}
-            >
-              <Text style={styles.primaryText}>Apply filters</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -506,9 +418,7 @@ function ContentCard({
     <Pressable style={styles.card} onPress={onOpen}>
       <View style={styles.cardMeta}>
         <Text style={styles.categoryPill}>
-          {item.type === "event"
-            ? "◈ EVENT"
-            : `${CATEGORIES[item.category].icon} ${CATEGORIES[item.category].label.toUpperCase()}`}
+          {item.type === "event" ? "EVENT" : "POST"}
         </Text>
         <Text style={styles.cardTime}>
           {status === "live"
@@ -523,18 +433,25 @@ function ContentCard({
         {item.description}
       </Text>
       <View style={styles.locationRow}>
-        <Text>⌖ {item.locationName}</Text>
+        <View style={styles.iconTextRow}>
+          <UntitledIcon name="pin" size={16} color={colors.muted} />
+          <Text style={styles.locationText}>{item.locationName}</Text>
+        </View>
         <Text>{formatDistance(item.distanceM)}</Text>
       </View>
       <View style={styles.actions}>
         <Pressable onPress={onLike}>
-          <Text style={liked ? styles.actionActive : styles.action}>
-            ♡ {item.likes + (liked ? 1 : 0)}
-          </Text>
+          <View style={styles.iconTextRow}>
+            <UntitledIcon name="heart" size={18} color={liked ? colors.coral : colors.muted} />
+            <Text style={liked ? styles.actionActive : styles.action}>{item.likes + (liked ? 1 : 0)}</Text>
+          </View>
         </Pressable>
-        <Text style={styles.action}>◌ {item.comments}</Text>
+        <View style={styles.iconTextRow}>
+          <UntitledIcon name="message" size={18} color={colors.muted} />
+          <Text style={styles.action}>{item.comments}</Text>
+        </View>
         <Pressable onPress={onSave}>
-          <Text style={saved ? styles.actionActive : styles.action}>⌑</Text>
+          <UntitledIcon name="bookmark" size={18} color={saved ? colors.accent : colors.muted} />
         </Pressable>
       </View>
     </Pressable>
@@ -552,14 +469,13 @@ function CreateScreen({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState<Category>("other");
   if (!kind)
     return (
       <View style={styles.createChooser}>
         <Text style={styles.screenTitle}>Share around you</Text>
         <Text style={styles.lead}>What would you like to create?</Text>
         <Pressable style={styles.choice} onPress={() => setKind("post")}>
-          <Text style={styles.choiceIcon}>●</Text>
+          <UntitledIcon name="message" size={30} color={colors.accent} />
           <View>
             <Text style={styles.choiceTitle}>Live post</Text>
             <Text style={styles.muted}>
@@ -568,7 +484,7 @@ function CreateScreen({
           </View>
         </Pressable>
         <Pressable style={styles.choice} onPress={() => setKind("event")}>
-          <Text style={styles.choiceIcon}>◈</Text>
+          <UntitledIcon name="calendar" size={30} color={colors.accent} />
           <View>
             <Text style={styles.choiceTitle}>Upcoming event</Text>
             <Text style={styles.muted}>
@@ -585,7 +501,7 @@ function CreateScreen({
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={() => setKind(null)}>
-        <Text style={styles.back}>‹ Back</Text>
+        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
       </Pressable>
       <Text style={styles.screenTitle}>New {kind}</Text>
       <TextInput
@@ -603,20 +519,9 @@ function CreateScreen({
         style={[styles.input, styles.textarea]}
         multiline
       />
-      <Text style={styles.fieldLabel}>CATEGORY</Text>
-      <View style={styles.chips}>
-        {(Object.keys(CATEGORIES) as Category[]).slice(0, 8).map((c) => (
-          <Chip
-            key={c}
-            label={`${CATEGORIES[c].icon} ${CATEGORIES[c].label}`}
-            active={category === c}
-            onPress={() => setCategory(c)}
-          />
-        ))}
-      </View>
       <View style={styles.locationPicker}>
         <Text style={styles.fieldLabel}>LOCATION</Text>
-        <Text style={styles.locationSelected}>⌖ Republic Square, Belgrade</Text>
+        <View style={styles.iconTextRow}><UntitledIcon name="pin" size={17} color={colors.ink} /><Text style={styles.locationSelected}>Republic Square, Belgrade</Text></View>
         <Text style={styles.muted}>Exact location · change</Text>
       </View>
       {kind === "event" && (
@@ -667,7 +572,7 @@ function PostCreateScreen({
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <Text style={styles.back}>‹ Back</Text>
+        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
       </Pressable>
       <Text style={styles.screenTitle}>New post</Text>
       <TextInput
@@ -680,9 +585,7 @@ function PostCreateScreen({
       />
       <View style={styles.locationPicker}>
         <Text style={styles.fieldLabel}>LOCATION</Text>
-        <Text style={styles.locationSelected}>
-          {userCoordinate ? "⌖ Your current location" : "⌖ Location required"}
-        </Text>
+        <View style={styles.iconTextRow}><UntitledIcon name="pin" size={17} color={colors.ink} /><Text style={styles.locationSelected}>{userCoordinate ? "Your current location" : "Location required"}</Text></View>
         <Text style={styles.muted}>
           {userCoordinate
             ? "Exact location"
@@ -751,7 +654,7 @@ function AuthScreen({ onBack }: { onBack: () => void }) {
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <Text style={styles.back}>‹ Back</Text>
+        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
       </Pressable>
       <Text style={styles.screenTitle}>
         {signingUp ? "Create your account" : "Sign in to Around"}
@@ -880,7 +783,7 @@ function AuthGate({ onBack }: { onBack: () => void }) {
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <Text style={styles.back}>‹ Back to map</Text>
+        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back to map</Text></View>
       </Pressable>
       <Text style={styles.screenTitle}>
         {mode === "sign_up"
@@ -1025,7 +928,7 @@ function AccountProfile({
       </View>
       <View style={styles.settings}>
         <Text>Location & privacy</Text>
-        <Text style={styles.muted}>›</Text>
+        <UntitledIcon name="chevronRight" size={18} color={colors.muted} />
       </View>
       <Pressable onPress={onLogout}>
         <Text style={styles.logOut}>Log out</Text>
@@ -1060,17 +963,6 @@ function ExploreScreen({
         placeholderTextColor={colors.muted}
         style={styles.exploreSearch}
       />
-      <Text style={styles.sectionTitle}>Trending in Belgrade</Text>
-      <View style={styles.chips}>
-        {["food", "music", "nightlife", "art"].map((c) => (
-          <Chip
-            key={c}
-            label={`${CATEGORIES[c as Category].icon} ${CATEGORIES[c as Category].label}`}
-            active={false}
-            onPress={() => setQuery(c)}
-          />
-        ))}
-      </View>
       <FlatList
         data={results}
         keyExtractor={(x) => x.id}
@@ -1078,9 +970,7 @@ function ExploreScreen({
         renderItem={({ item }) => (
           <Pressable style={styles.result} onPress={() => onOpen(item)}>
             <View style={styles.resultIcon}>
-              <Text>
-                {item.type === "event" ? "◈" : CATEGORIES[item.category].icon}
-              </Text>
+              <UntitledIcon name={item.type === "event" ? "calendar" : "message"} size={20} color={colors.accent} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.resultTitle}>{item.title}</Text>
@@ -1088,7 +978,7 @@ function ExploreScreen({
                 {item.locationName} · {formatDistance(item.distanceM)}
               </Text>
             </View>
-            <Text style={styles.muted}>›</Text>
+            <UntitledIcon name="chevronRight" size={18} color={colors.muted} />
           </Pressable>
         )}
       />
@@ -1130,7 +1020,7 @@ function ProfileScreen({ saved }: { saved: number }) {
       </View>
       <View style={styles.settings}>
         <Text>Location & privacy</Text>
-        <Text style={styles.muted}>›</Text>
+        <UntitledIcon name="chevronRight" size={18} color={colors.muted} />
       </View>
       <Pressable
         onPress={() =>
@@ -1160,31 +1050,42 @@ function BottomNav({
   active: Tab;
   onChange: (tab: Tab) => void;
 }) {
-  const entries: [Tab, string][] = [
-    ["Map", "⌖"],
-    ["Feed", "≡"],
-    ["Create", "+"],
-    ["Explore", "⌕"],
-    ["Profile", "◯"],
+  const entries = [
+    { tab: "Map" as const, label: "Map", icon: "map" as const },
+    { tab: "Feed" as const, label: "Feed", icon: "feed" as const },
+    { tab: "Create" as const, label: "Create", icon: "plus" as const },
+    {
+      tab: "Explore" as const,
+      label: "Explore",
+      icon: "search" as const,
+    },
+    { tab: "Profile" as const, label: "Me", icon: "user" as const },
   ];
   return (
-    <View style={styles.nav}>
-      {entries.map(([tab, icon]) => (
-        <Pressable
-          key={tab}
-          style={styles.navItem}
-          onPress={() => onChange(tab)}
-        >
-          <View style={tab === "Create" ? styles.createNav : undefined}>
-            <Text style={[styles.navIcon, active === tab && styles.navActive]}>
-              {icon}
-            </Text>
-          </View>
-          <Text style={[styles.navLabel, active === tab && styles.navActive]}>
-            {tab === "Profile" ? "Me" : tab}
-          </Text>
-        </Pressable>
-      ))}
+    <View style={styles.navContainer}>
+      <BlurView intensity={56} tint="light" style={styles.nav}>
+        {entries.map(({ tab, label, icon }) => (
+          <Pressable
+            key={tab}
+            style={styles.navItem}
+            onPress={() => onChange(tab)}
+          >
+            <View
+              style={[
+                styles.navItemInner,
+                active === tab && styles.navItemActive,
+              ]}
+            >
+              <UntitledIcon name={icon} size={23} color={active === tab ? colors.accent : colors.muted} />
+              <Text
+                style={[styles.navLabel, active === tab && styles.navActive]}
+              >
+                {label}
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </BlurView>
     </View>
   );
 }
@@ -1234,7 +1135,7 @@ function DetailSheet({
           {status === "live" ? "LIVE NOW" : item.type.toUpperCase()}
         </Text>
         <Pressable onPress={onClose}>
-          <Text style={styles.close}>×</Text>
+          <UntitledIcon name="close" size={23} color={colors.ink} />
         </Pressable>
       </View>
       <Text style={styles.detailTitle}>{item.title}</Text>
@@ -1244,18 +1145,10 @@ function DetailSheet({
       <Text style={styles.detailBody}>{item.description}</Text>
       <View style={styles.detailActions}>
         <Pressable style={styles.detailAction} onPress={() => onLike(item.id)}>
-          <Text
-            style={liked.has(item.id) ? styles.actionActive : styles.action}
-          >
-            ♡ {item.likes + (liked.has(item.id) ? 1 : 0)}
-          </Text>
+          <View style={styles.iconTextRow}><UntitledIcon name="heart" size={18} color={liked.has(item.id) ? colors.coral : colors.muted} /><Text style={liked.has(item.id) ? styles.actionActive : styles.action}>{item.likes + (liked.has(item.id) ? 1 : 0)}</Text></View>
         </Pressable>
         <Pressable style={styles.detailAction} onPress={() => onSave(item.id)}>
-          <Text
-            style={saved.has(item.id) ? styles.actionActive : styles.action}
-          >
-            ⌑ Save
-          </Text>
+          <View style={styles.iconTextRow}><UntitledIcon name="bookmark" size={18} color={saved.has(item.id) ? colors.accent : colors.muted} /><Text style={saved.has(item.id) ? styles.actionActive : styles.action}>Save</Text></View>
         </Pressable>
         <Pressable
           style={styles.detailAction}
@@ -1266,7 +1159,7 @@ function DetailSheet({
             )
           }
         >
-          <Text style={styles.action}>•••</Text>
+          <UntitledIcon name="more" size={20} color={colors.muted} />
         </Pressable>
       </View>
     </View>
@@ -1322,10 +1215,6 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     flexDirection: "row",
     gap: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.09,
-    shadowRadius: 10,
-    elevation: 3,
   },
   searchText: { color: colors.muted },
   iconButton: {
@@ -1348,16 +1237,12 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 3,
     borderColor: "#fff",
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
   },
   markerText: { color: "#fff", fontWeight: "800" },
   recenter: {
     position: "absolute",
-    right: 18,
-    bottom: 20,
+    right: 28,
+    bottom: 118,
     backgroundColor: "#fff",
     height: 46,
     width: 46,
@@ -1367,7 +1252,7 @@ const styles = StyleSheet.create({
   },
   permission: {
     position: "absolute",
-    bottom: 22,
+    bottom: 118,
     left: 18,
     backgroundColor: colors.ink,
     borderRadius: 10,
@@ -1418,32 +1303,42 @@ const styles = StyleSheet.create({
   },
   muted: { color: colors.muted, fontSize: 13 },
   chevron: { fontSize: 25, color: colors.muted },
-  nav: {
-    height: 74,
-    paddingHorizontal: 8,
-    paddingBottom: 7,
+  navContainer: {
+    height: 72,
     position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "#fff",
-    borderTopWidth: 1,
-    borderColor: colors.line,
+    left: 14,
+    right: 14,
+    bottom: 28,
+    borderRadius: 36,
+    overflow: "hidden",
+  },
+  nav: {
+    flex: 1,
+    paddingHorizontal: 5,
+    paddingVertical: 5,
+    backgroundColor: "rgba(255,255,255,0.48)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.86)",
+    borderRadius: 36,
     flexDirection: "row",
     justifyContent: "space-around",
   },
-  navItem: { alignItems: "center", justifyContent: "center", minWidth: 50 },
-  navIcon: { fontSize: 21, color: colors.muted, textAlign: "center" },
-  navLabel: { fontSize: 10, color: colors.muted, marginTop: 3 },
-  navActive: { color: colors.accent, fontWeight: "800" },
-  createNav: {
-    height: 43,
-    width: 43,
-    borderRadius: 22,
-    backgroundColor: colors.accent,
+  navItem: { flex: 1, alignItems: "center", justifyContent: "center" },
+  navItemInner: {
+    width: "100%",
+    height: 58,
+    borderRadius: 29,
+    alignItems: "center",
     justifyContent: "center",
-    marginTop: -15,
   },
+  navItemActive: { backgroundColor: "rgba(37,108,77,0.14)" },
+  navLabel: {
+    fontSize: 10,
+    color: colors.muted,
+    marginTop: 3,
+    fontWeight: "700",
+  },
+  navActive: { color: colors.accent, fontWeight: "800" },
   screenHeader: { paddingHorizontal: 20, paddingTop: 18, paddingBottom: 12 },
   screenTitle: {
     fontSize: 29,
@@ -1489,6 +1384,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     color: colors.muted,
   },
+  iconTextRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  locationText: { color: colors.muted },
   actions: {
     borderTopWidth: 1,
     borderTopColor: colors.line,
@@ -1516,7 +1413,6 @@ const styles = StyleSheet.create({
     gap: 16,
     alignItems: "center",
   },
-  choiceIcon: { color: colors.accent, fontSize: 30 },
   choiceTitle: {
     fontWeight: "800",
     fontSize: 17,
@@ -1524,7 +1420,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   createForm: { padding: 20, paddingBottom: 105 },
-  back: { color: colors.accent, fontWeight: "800", marginBottom: 18 },
+  backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 18 },
+  back: { color: colors.accent, fontWeight: "800" },
   input: {
     backgroundColor: colors.surface,
     borderWidth: 1,
@@ -1664,10 +1561,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 25,
     padding: 20,
     paddingBottom: 86,
-    shadowColor: "#000",
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 12,
   },
   handle: {
     width: 42,
