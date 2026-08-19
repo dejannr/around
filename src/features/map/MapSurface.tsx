@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View } from "react-native";
+import { captureRef } from "react-native-view-shot";
 import type { ContentItem } from "../../data/demo";
 type MapboxModule = typeof import("@rnmapbox/maps").default;
 type CameraRef = ComponentRef<MapboxModule["Camera"]>;
@@ -69,23 +70,21 @@ export function MapSurface({
   const shapeSourceRef = useRef<ShapeSourceRef | null>(null);
   const cameraRef = useRef<CameraRef | null>(null);
   const [hasMapLayout, setHasMapLayout] = useState(false);
+  const [photoPinImages, setPhotoPinImages] = useState<Record<string, string>>(
+    {},
+  );
   const markerImages = useMemo(
     () => ({
       aroundPin: require("../../../assets/around-map-pin.png"),
       ...Object.fromEntries(
         items.flatMap((item) =>
-          item.imageUrl
-            ? [
-                [
-                  `activity-photo-${item.id}`,
-                  { url: mapThumbnailUrl(item.imageUrl) },
-                ],
-              ]
+          photoPinImages[item.id]
+            ? [[`activity-photo-${item.id}`, photoPinImages[item.id]]]
             : [],
         ),
       ),
     }),
-    [items],
+    [items, photoPinImages],
   );
   const points = useMemo(
     () => ({
@@ -95,8 +94,10 @@ export function MapSurface({
         properties: {
           id: item.id,
           contentType: item.type,
-          hasImage: Boolean(item.imageUrl),
-          imageKey: item.imageUrl ? `activity-photo-${item.id}` : null,
+          hasImage: Boolean(photoPinImages[item.id]),
+          imageKey: photoPinImages[item.id]
+            ? `activity-photo-${item.id}`
+            : null,
         },
         geometry: {
           type: "Point" as const,
@@ -257,10 +258,8 @@ export function MapSurface({
               ]}
               style={{
                 iconImage: ["get", "imageKey"],
-                iconSize: 0.19,
+                iconSize: 0.24,
                 iconTranslate: [0, -37],
-                iconHaloColor: "#ffffff",
-                iconHaloWidth: 0.75,
                 iconAllowOverlap: true,
                 iconIgnorePlacement: true,
                 iconOpacityTransition: { duration: 260, delay: 0 },
@@ -269,9 +268,71 @@ export function MapSurface({
           </Mapbox.ShapeSource>
         </Mapbox.MapView>
       )}
+      <View pointerEvents="none" style={styles.photoCaptureStage}>
+        {items.flatMap((item) =>
+          item.imageUrl && !photoPinImages[item.id]
+            ? [
+                <CircularPhotoCapture
+                  key={`${item.id}-${item.imageUrl}`}
+                  imageUrl={mapThumbnailUrl(item.imageUrl)}
+                  onCaptured={(uri) =>
+                    setPhotoPinImages((current) =>
+                      current[item.id] === uri
+                        ? current
+                        : { ...current, [item.id]: uri },
+                    )
+                  }
+                />,
+              ]
+            : [],
+        )}
+      </View>
     </View>
   );
 }
+
+function CircularPhotoCapture({
+  imageUrl,
+  onCaptured,
+}: {
+  imageUrl: string;
+  onCaptured: (uri: string) => void;
+}) {
+  const captureTarget = useRef<View>(null);
+  const hasCaptured = useRef(false);
+  useEffect(() => {
+    hasCaptured.current = false;
+  }, [imageUrl]);
+  const capture = () => {
+    if (hasCaptured.current || !captureTarget.current) return;
+    hasCaptured.current = true;
+    requestAnimationFrame(() => {
+      if (!captureTarget.current) return;
+      void captureRef(captureTarget, {
+        format: "png",
+        quality: 1,
+        result: "tmpfile",
+        width: 72,
+        height: 72,
+      })
+        .then(onCaptured)
+        .catch(() => {
+          hasCaptured.current = false;
+        });
+    });
+  };
+  return (
+    <View ref={captureTarget} collapsable={false} style={styles.photoCapture}>
+      <Image
+        source={{ uri: imageUrl }}
+        style={styles.photoCaptureImage}
+        resizeMode="cover"
+        onLoad={capture}
+      />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   fallback: {
     ...StyleSheet.absoluteFill,
@@ -292,5 +353,24 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: "center",
     paddingHorizontal: 55,
+  },
+  photoCaptureStage: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    left: -100,
+    top: -100,
+    overflow: "hidden",
+  },
+  photoCapture: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    overflow: "hidden",
+    backgroundColor: "#ffffff",
+  },
+  photoCaptureImage: {
+    width: "100%",
+    height: "100%",
   },
 });
