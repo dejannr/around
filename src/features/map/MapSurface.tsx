@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ComponentRef } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { ContentItem } from "../../data/demo";
 type MapboxModule = typeof import("@rnmapbox/maps").default;
@@ -8,6 +8,14 @@ type ShapeSourceRef = ComponentRef<MapboxModule["ShapeSource"]>;
 type Props = {
   items: ContentItem[];
   onSelect: (item: ContentItem) => void;
+  onViewportChange: (viewport: {
+    center: [number, number];
+    zoom: number;
+    bounds: {
+      northeast: [number, number];
+      southwest: [number, number];
+    };
+  }) => void;
   showUserLocation: boolean;
   userCoordinate: [number, number] | null;
 };
@@ -20,21 +28,76 @@ const Mapbox = token
   : null;
 if (token && Mapbox) Mapbox.setAccessToken(token);
 
+// Mapbox symbols preserve an image's original proportions. Fetch a small square
+// thumbnail so every photo sits neatly in the circular head of its pin.
+function mapThumbnailUrl(imageUrl: string) {
+  try {
+    const url = new URL(imageUrl);
+    if (url.hostname.endsWith("images.unsplash.com")) {
+      url.searchParams.set("auto", "format");
+      url.searchParams.set("fit", "crop");
+      url.searchParams.set("w", "96");
+      url.searchParams.set("h", "96");
+      url.searchParams.set("q", "84");
+    }
+    if (
+      url.hostname.endsWith(".supabase.co") &&
+      url.pathname.includes("/storage/v1/object/public/")
+    ) {
+      url.pathname = url.pathname.replace(
+        "/storage/v1/object/public/",
+        "/storage/v1/render/image/public/",
+      );
+      url.searchParams.set("width", "96");
+      url.searchParams.set("height", "96");
+      url.searchParams.set("resize", "cover");
+    }
+    return url.toString();
+  } catch {
+    return imageUrl;
+  }
+}
+
 // Uses a single clustered ShapeSource rather than React marker components.
 export function MapSurface({
   items,
   onSelect,
+  onViewportChange,
   showUserLocation,
   userCoordinate,
 }: Props) {
   const shapeSourceRef = useRef<ShapeSourceRef | null>(null);
   const cameraRef = useRef<CameraRef | null>(null);
+  const [hasMapLayout, setHasMapLayout] = useState(false);
+  const markerImages = useMemo(
+    () => ({
+      aroundPin: require("../../../assets/around-map-pin.png"),
+      ...Object.fromEntries(
+        items.flatMap((item) =>
+          item.imageUrl
+            ? [
+                [
+                  `activity-photo-${item.id}`,
+                  { url: mapThumbnailUrl(item.imageUrl) },
+                ],
+              ]
+            : [],
+        ),
+      ),
+    }),
+    [items],
+  );
   const points = useMemo(
     () => ({
       type: "FeatureCollection" as const,
       features: items.map((item) => ({
         type: "Feature" as const,
-        properties: { id: item.id, contentType: item.type },
+        properties: {
+          id: item.id,
+          contentType: item.type,
+          hasImage: Boolean(item.imageUrl),
+          imageKey: item.imageUrl ? `activity-photo-${item.id}` : null,
+        },
         geometry: {
           type: "Point" as const,
           coordinates: [item.longitude, item.latitude],
@@ -56,90 +119,157 @@ export function MapSurface({
       </View>
     );
   return (
-    <Mapbox.MapView
+    <View
       style={StyleSheet.absoluteFill}
-      styleURL={Mapbox.StyleURL.Street}
-      zoomEnabled
-      scrollEnabled
-      logoEnabled={false}
-      attributionEnabled={false}
+      onLayout={({ nativeEvent: { layout } }) => {
+        const ready = layout.width > 0 && layout.height > 0;
+        setHasMapLayout((current) => (current === ready ? current : ready));
+      }}
     >
-      <Mapbox.Camera
-        ref={cameraRef}
-        centerCoordinate={userCoordinate ?? [20.4573, 44.8176]}
-        zoomLevel={userCoordinate ? 14 : 12}
-      />
-      {showUserLocation && <Mapbox.UserLocation visible />}
-      <Mapbox.Images
-        images={{ aroundPin: require("../../../assets/around-map-pin.png") }}
-      />
-      <Mapbox.ShapeSource
-        id="around-content"
-        shape={points}
-        cluster
-        clusterRadius={48}
-        ref={shapeSourceRef}
-        onPress={(event) => {
-          const feature = event.features[0];
-          if (
-            feature?.properties?.cluster &&
-            feature.geometry.type === "Point"
-          ) {
-            void shapeSourceRef.current
-              ?.getClusterExpansionZoom(JSON.stringify(feature))
-              .then((zoomLevel) => {
-                const point = feature.geometry as unknown as {
-                  coordinates: [number, number];
-                };
-                const [longitude, latitude] = point.coordinates as [
-                  number,
-                  number,
-                ];
-                cameraRef.current?.setCamera({
-                  centerCoordinate: [longitude, latitude],
-                  zoomLevel,
-                  animationDuration: 300,
-                });
-              });
-            return;
-          }
-          const id = feature?.properties?.id;
-          const match = items.find((item) => item.id === id);
-          if (match) onSelect(match);
-        }}
-      >
-        <Mapbox.CircleLayer
-          id="clusters"
-          filter={["has", "point_count"]}
-          style={{
-            circleColor: "#e81e4c",
-            circleRadius: 20,
-            circleStrokeColor: "#fff",
-            circleStrokeWidth: 2,
+      {hasMapLayout && (
+        <Mapbox.MapView
+          style={StyleSheet.absoluteFill}
+          styleURL={Mapbox.StyleURL.Street}
+          zoomEnabled
+          scrollEnabled
+          logoEnabled={false}
+          attributionEnabled={false}
+          onCameraChanged={(state) => {
+            const center = state.properties.center;
+            if (center.length < 2) return;
+            onViewportChange({
+              center: [center[0], center[1]],
+              zoom: state.properties.zoom,
+              bounds: {
+                northeast: [
+                  state.properties.bounds.ne[0],
+                  state.properties.bounds.ne[1],
+                ],
+                southwest: [
+                  state.properties.bounds.sw[0],
+                  state.properties.bounds.sw[1],
+                ],
+              },
+            });
           }}
-        />
-        <Mapbox.SymbolLayer
-          id="cluster-count"
-          filter={["has", "point_count"]}
-          style={{
-            textField: ["get", "point_count_abbreviated"],
-            textSize: 12,
-            textColor: "#ffffff",
-          }}
-        />
-        <Mapbox.SymbolLayer
-          id="points"
-          filter={["!", ["has", "point_count"]]}
-          style={{
-            iconImage: "aroundPin",
-            iconSize: 0.72,
-            iconAnchor: "bottom",
-            iconAllowOverlap: true,
-            iconIgnorePlacement: true,
-          }}
-        />
-      </Mapbox.ShapeSource>
-    </Mapbox.MapView>
+        >
+          <Mapbox.Camera
+            ref={cameraRef}
+            centerCoordinate={userCoordinate ?? [20.4573, 44.8176]}
+            zoomLevel={userCoordinate ? 14 : 12}
+          />
+          {showUserLocation && <Mapbox.UserLocation visible />}
+          <Mapbox.Images images={markerImages} />
+          <Mapbox.ShapeSource
+            id="around-content"
+            shape={points}
+            cluster
+            clusterRadius={48}
+            ref={shapeSourceRef}
+            onPress={(event) => {
+              const feature = event.features[0];
+              if (
+                feature?.properties?.cluster &&
+                feature.geometry.type === "Point"
+              ) {
+                void shapeSourceRef.current
+                  ?.getClusterExpansionZoom(JSON.stringify(feature))
+                  .then((zoomLevel) => {
+                    const point = feature.geometry as unknown as {
+                      coordinates: [number, number];
+                    };
+                    const [longitude, latitude] = point.coordinates;
+                    cameraRef.current?.setCamera({
+                      centerCoordinate: [longitude, latitude],
+                      zoomLevel,
+                      animationDuration: 420,
+                      animationMode: "easeTo",
+                    });
+                  });
+                return;
+              }
+              const id = feature?.properties?.id;
+              const match = items.find((item) => item.id === id);
+              if (match) onSelect(match);
+            }}
+          >
+            <Mapbox.CircleLayer
+              id="clusters"
+              filter={["has", "point_count"]}
+              style={{
+                circleColor: "#e81e4c",
+                circleRadius: [
+                  "step",
+                  ["get", "point_count"],
+                  18,
+                  5,
+                  22,
+                  15,
+                  27,
+                ],
+                circleStrokeColor: "#fff",
+                circleStrokeWidth: 2,
+                circleOpacity: 0.96,
+                circleRadiusTransition: { duration: 260, delay: 0 },
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="cluster-count"
+              filter={["has", "point_count"]}
+              style={{
+                textField: ["get", "point_count_abbreviated"],
+                textSize: 12,
+                textColor: "#ffffff",
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="points"
+              filter={["!", ["get", "hasImage"]]}
+              style={{
+                iconImage: "aroundPin",
+                iconSize: 0.72,
+                iconAnchor: "bottom",
+                iconAllowOverlap: true,
+                iconIgnorePlacement: true,
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="photo-pin-tail"
+              filter={[
+                "all",
+                ["!", ["has", "point_count"]],
+                ["get", "hasImage"],
+              ]}
+              style={{
+                iconImage: "aroundPin",
+                iconSize: 0.88,
+                iconAnchor: "bottom",
+                iconAllowOverlap: true,
+                iconIgnorePlacement: true,
+              }}
+            />
+            <Mapbox.SymbolLayer
+              id="photo-pins"
+              filter={[
+                "all",
+                ["!", ["has", "point_count"]],
+                ["get", "hasImage"],
+              ]}
+              style={{
+                iconImage: ["get", "imageKey"],
+                iconSize: 0.19,
+                iconTranslate: [0, -37],
+                iconHaloColor: "#ffffff",
+                iconHaloWidth: 0.75,
+                iconAllowOverlap: true,
+                iconIgnorePlacement: true,
+                iconOpacityTransition: { duration: 260, delay: 0 },
+              }}
+            />
+          </Mapbox.ShapeSource>
+        </Mapbox.MapView>
+      )}
+    </View>
   );
 }
 const styles = StyleSheet.create({

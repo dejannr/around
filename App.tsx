@@ -1,8 +1,9 @@
 import { StatusBar } from "expo-status-bar";
 import { BlurView } from "expo-blur";
+import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -36,6 +37,11 @@ const colors = {
 };
 type Tab = "Map" | "Feed" | "Create" | "Explore" | "Profile";
 type Coordinate = [longitude: number, latitude: number];
+type MapViewport = {
+  center: Coordinate;
+  zoom: number;
+  bounds: { northeast: Coordinate; southwest: Coordinate };
+};
 type Profile = {
   username: string;
   display_name: string;
@@ -50,6 +56,8 @@ type MapMarker = {
   latitude: number;
   title: string;
   starts_at: string;
+  media_url: string | null;
+  owner_id: string | null;
 };
 
 function App() {
@@ -65,6 +73,17 @@ function App() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [publishedPosts, setPublishedPosts] = useState<ContentItem[]>([]);
   const [mapMarkers, setMapMarkers] = useState<ContentItem[]>([]);
+  const [mapViewport, setMapViewport] = useState<MapViewport>({
+    center: [20.4573, 44.8176],
+    zoom: 12,
+    bounds: {
+      northeast: [20.52, 44.87],
+      southwest: [20.39, 44.76],
+    },
+  });
+  const [searchedViewport, setSearchedViewport] = useState<MapViewport | null>(
+    null,
+  );
 
   const content = useMemo(
     () =>
@@ -90,6 +109,7 @@ function App() {
       setUserCoordinate([position.coords.longitude, position.coords.latitude]);
     }
   };
+  const searchThisArea = () => setSearchedViewport(mapViewport);
   const loadProfile = async (userId: string) => {
     const { data } = await supabase
       .from("profiles")
@@ -113,8 +133,9 @@ function App() {
     return () => listener.subscription.unsubscribe();
   }, []);
   useEffect(() => {
-    if (!userCoordinate) return;
-    const [longitude, latitude] = userCoordinate;
+    // The map remains clean until the person explicitly searches the area.
+    if (!searchedViewport) return;
+    const [longitude, latitude] = searchedViewport.center;
     const loadMarkers = async () => {
       const { data, error } = await supabase.rpc("map_viewport", {
         north: latitude + 0.12,
@@ -135,28 +156,56 @@ function App() {
           title: marker.title,
           description: marker.title,
           author: "@around",
+          ownerId: marker.owner_id ?? undefined,
           locationName: "Nearby",
           longitude: marker.longitude,
           latitude: marker.latitude,
           distanceM: 0,
           createdAt: marker.starts_at,
+          imageUrl: marker.media_url ?? undefined,
           likes: 0,
           comments: 0,
         })),
       );
     };
     void loadMarkers();
-  }, [userCoordinate]);
-  const publishPost = async (caption: string) => {
+  }, [searchedViewport]);
+  const publishPost = async (
+    caption: string,
+    photo: { uri: string; mimeType: string },
+  ) => {
     if (!session) throw new Error("Please sign in before publishing.");
     if (!userCoordinate)
       throw new Error("Choose your location on the map before publishing.");
+    const extension =
+      photo.mimeType === "image/png"
+        ? "png"
+        : photo.mimeType === "image/webp"
+          ? "webp"
+          : "jpg";
+    const objectPath = `${session.user.id}/${Date.now()}.${extension}`;
+    const imageBytes = await fetch(photo.uri).then((response) =>
+      response.arrayBuffer(),
+    );
+    const { error: uploadError } = await supabase.storage
+      .from("post-media")
+      .upload(objectPath, imageBytes, {
+        contentType: photo.mimeType,
+        upsert: false,
+      });
+    if (uploadError) throw uploadError;
+    const { data: publicUrl } = supabase.storage
+      .from("post-media")
+      .getPublicUrl(objectPath);
     const point = `POINT(${userCoordinate[0]} ${userCoordinate[1]})`;
+    const title = caption.trim() || "New activity";
     const { data, error } = await supabase
       .from("posts")
       .insert({
         user_id: session.user.id,
-        caption,
+        caption: caption.trim() || null,
+        media_url: publicUrl.publicUrl,
+        media_type: "image",
         location: point,
         public_location: point,
         location_name: "Current location",
@@ -171,19 +220,45 @@ function App() {
         id: created.id,
         type: "post",
         category: "other",
-        title: caption,
-        description: caption,
+        title,
+        description: title,
         author: "@you",
+        ownerId: session.user.id,
         locationName: "Current location",
         longitude: userCoordinate[0],
         latitude: userCoordinate[1],
         distanceM: 0,
         createdAt: created.created_at,
+        imageUrl: publicUrl.publicUrl,
+        mediaPath: objectPath,
         likes: 0,
         comments: 0,
       },
       ...current,
     ]);
+  };
+  const deletePost = async (item: ContentItem) => {
+    if (!session || item.ownerId !== session.user.id || item.type !== "post") {
+      throw new Error("You can only delete your own posts.");
+    }
+    const mediaPath =
+      item.mediaPath ??
+      item.imageUrl
+        ?.split("/storage/v1/object/public/post-media/")[1]
+        ?.split("?")[0];
+    if (mediaPath) {
+      const { error: storageError } = await supabase.storage
+        .from("post-media")
+        .remove([decodeURIComponent(mediaPath)]);
+      if (storageError) throw storageError;
+    }
+    const { error } = await supabase.from("posts").delete().eq("id", item.id);
+    if (error) throw error;
+    setPublishedPosts((current) =>
+      current.filter((post) => post.id !== item.id),
+    );
+    setMapMarkers((current) => current.filter((post) => post.id !== item.id));
+    setSelected(null);
   };
   const toggle = (
     id: string,
@@ -205,6 +280,8 @@ function App() {
           selected={selected}
           onSelect={setSelected}
           onLocation={requestLocation}
+          onViewportChange={setMapViewport}
+          onSearchThisArea={searchThisArea}
           locationAllowed={locationAllowed}
           userCoordinate={userCoordinate}
         />
@@ -225,8 +302,8 @@ function App() {
             userId={session?.user.id ?? null}
             userCoordinate={userCoordinate}
             onBack={() => setCreateKind(null)}
-            onPublish={async (caption) => {
-              await publishPost(caption);
+            onPublish={async (caption, photo) => {
+              await publishPost(caption, photo);
               setCreateKind(null);
               setTab("Map");
               Alert.alert("Published", "Your post is now live around you.");
@@ -266,11 +343,40 @@ function App() {
       />
       <DetailSheet
         item={selected}
+        canDelete={Boolean(
+          selected &&
+          session &&
+          selected.type === "post" &&
+          selected.ownerId === session.user.id,
+        )}
         liked={liked}
         saved={saved}
         onClose={() => setSelected(null)}
         onLike={(id) => toggle(id, setLiked)}
         onSave={(id) => toggle(id, setSaved)}
+        onDelete={() => {
+          if (!selected) return;
+          Alert.alert(
+            "Delete activity?",
+            "This permanently removes the activity and its photo.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Delete",
+                style: "destructive",
+                onPress: () =>
+                  void deletePost(selected).catch((error) =>
+                    Alert.alert(
+                      "Could not delete",
+                      error instanceof Error
+                        ? error.message
+                        : "Please try again.",
+                    ),
+                  ),
+              },
+            ],
+          );
+        }}
       />
     </SafeAreaView>
   );
@@ -324,6 +430,8 @@ function MapScreen(props: {
   selected: ContentItem | null;
   onSelect: (item: ContentItem) => void;
   onLocation: () => void;
+  onViewportChange: (viewport: MapViewport) => void;
+  onSearchThisArea: () => void;
   locationAllowed: boolean | null;
   userCoordinate: Coordinate | null;
 }) {
@@ -331,15 +439,47 @@ function MapScreen(props: {
     items,
     onSelect,
     onLocation,
+    onViewportChange,
+    onSearchThisArea,
     locationAllowed,
     userCoordinate,
   } = props;
+  const [showSearchThisArea, setShowSearchThisArea] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
+  const handleViewportChange = (viewport: MapViewport) => {
+    setShowSearchThisArea(false);
+    onViewportChange(viewport);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => {
+      const { northeast, southwest } = viewport.bounds;
+      const hasVisiblePin = items.some(
+        (item) =>
+          item.longitude >= southwest[0] &&
+          item.longitude <= northeast[0] &&
+          item.latitude >= southwest[1] &&
+          item.latitude <= northeast[1],
+      );
+      setShowSearchThisArea(!hasVisiblePin);
+    }, 700);
+  };
+  const handleSearchThisArea = () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    setShowSearchThisArea(false);
+    onSearchThisArea();
+  };
   return (
     <View style={styles.page}>
       <View style={styles.mapCanvas}>
         <MapSurface
           items={items}
           onSelect={onSelect}
+          onViewportChange={handleViewportChange}
           showUserLocation={locationAllowed === true}
           userCoordinate={userCoordinate}
         />
@@ -351,6 +491,14 @@ function MapScreen(props: {
             tintColor={colors.accent}
           />
         </View>
+        {showSearchThisArea && (
+          <Pressable
+            style={styles.searchThisArea}
+            onPress={handleSearchThisArea}
+          >
+            <Text style={styles.searchThisAreaText}>Search this area</Text>
+          </Pressable>
+        )}
         <Pressable style={styles.recenter} onPress={onLocation}>
           <UntitledIcon name="navigation" size={22} color="#1A73E8" />
         </Pressable>
@@ -451,8 +599,14 @@ function ContentCard({
       <View style={styles.actions}>
         <Pressable onPress={onLike}>
           <View style={styles.iconTextRow}>
-            <UntitledIcon name="heart" size={18} color={liked ? colors.coral : colors.muted} />
-            <Text style={liked ? styles.actionActive : styles.action}>{item.likes + (liked ? 1 : 0)}</Text>
+            <UntitledIcon
+              name="heart"
+              size={18}
+              color={liked ? colors.coral : colors.muted}
+            />
+            <Text style={liked ? styles.actionActive : styles.action}>
+              {item.likes + (liked ? 1 : 0)}
+            </Text>
           </View>
         </Pressable>
         <View style={styles.iconTextRow}>
@@ -460,7 +614,11 @@ function ContentCard({
           <Text style={styles.action}>{item.comments}</Text>
         </View>
         <Pressable onPress={onSave}>
-          <UntitledIcon name="bookmark" size={18} color={saved ? colors.accent : colors.muted} />
+          <UntitledIcon
+            name="bookmark"
+            size={18}
+            color={saved ? colors.accent : colors.muted}
+          />
         </Pressable>
       </View>
     </Pressable>
@@ -482,22 +640,13 @@ function CreateScreen({
     return (
       <View style={styles.createChooser}>
         <Text style={styles.screenTitle}>Share around you</Text>
-        <Text style={styles.lead}>What would you like to create?</Text>
+        <Text style={styles.lead}>Every activity includes one photo.</Text>
         <Pressable style={styles.choice} onPress={() => setKind("post")}>
           <UntitledIcon name="message" size={30} color={colors.accent} />
           <View>
-            <Text style={styles.choiceTitle}>Live post</Text>
+            <Text style={styles.choiceTitle}>New activity</Text>
             <Text style={styles.muted}>
-              Share something happening right now
-            </Text>
-          </View>
-        </Pressable>
-        <Pressable style={styles.choice} onPress={() => setKind("event")}>
-          <UntitledIcon name="calendar" size={30} color={colors.accent} />
-          <View>
-            <Text style={styles.choiceTitle}>Upcoming event</Text>
-            <Text style={styles.muted}>
-              Bring people together at a place and time
+              Share something happening around you
             </Text>
           </View>
         </Pressable>
@@ -510,7 +659,10 @@ function CreateScreen({
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={() => setKind(null)}>
-        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
+        <View style={styles.backRow}>
+          <UntitledIcon name="arrowLeft" size={18} color={colors.accent} />
+          <Text style={styles.back}>Back</Text>
+        </View>
       </Pressable>
       <Text style={styles.screenTitle}>New {kind}</Text>
       <TextInput
@@ -530,7 +682,10 @@ function CreateScreen({
       />
       <View style={styles.locationPicker}>
         <Text style={styles.fieldLabel}>LOCATION</Text>
-        <View style={styles.iconTextRow}><UntitledIcon name="pin" size={17} color={colors.ink} /><Text style={styles.locationSelected}>Republic Square, Belgrade</Text></View>
+        <View style={styles.iconTextRow}>
+          <UntitledIcon name="pin" size={17} color={colors.ink} />
+          <Text style={styles.locationSelected}>Republic Square, Belgrade</Text>
+        </View>
         <Text style={styles.muted}>Exact location · change</Text>
       </View>
       {kind === "event" && (
@@ -559,16 +714,22 @@ function PostCreateScreen({
   userId: string | null;
   userCoordinate: Coordinate | null;
   onBack: () => void;
-  onPublish: (caption: string) => Promise<void>;
+  onPublish: (
+    caption: string,
+    photo: { uri: string; mimeType: string },
+  ) => Promise<void>;
 }) {
   const [caption, setCaption] = useState("");
+  const [photo, setPhoto] = useState<{ uri: string; mimeType: string } | null>(
+    null,
+  );
   const [saving, setSaving] = useState(false);
   if (!userId) return <AuthGate onBack={onBack} />;
   const publish = async () => {
-    if (!caption.trim()) return;
+    if (!photo) return;
     setSaving(true);
     try {
-      await onPublish(caption.trim());
+      await onPublish(caption.trim(), photo);
     } catch (error) {
       Alert.alert(
         "Could not publish",
@@ -578,23 +739,72 @@ function PostCreateScreen({
       setSaving(false);
     }
   };
+  const choosePhoto = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(
+        "Photo permission needed",
+        "Allow photo access to add the required activity photo.",
+      );
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      allowsMultipleSelection: false,
+      quality: 0.82,
+    });
+    if (result.canceled) return;
+    const asset = result.assets[0];
+    const mimeType =
+      asset.mimeType === "image/png" || asset.mimeType === "image/webp"
+        ? asset.mimeType
+        : "image/jpeg";
+    setPhoto({ uri: asset.uri, mimeType });
+  };
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
+        <View style={styles.backRow}>
+          <UntitledIcon name="arrowLeft" size={18} color={colors.accent} />
+          <Text style={styles.back}>Back</Text>
+        </View>
       </Pressable>
       <Text style={styles.screenTitle}>New post</Text>
       <TextInput
         value={caption}
         onChangeText={setCaption}
-        placeholder="What’s happening?"
+        placeholder="Add a caption (optional)"
         placeholderTextColor={colors.muted}
         style={[styles.input, styles.textarea]}
         multiline
       />
+      <Text style={styles.fieldLabel}>PHOTO · REQUIRED</Text>
+      <Pressable style={styles.photoPicker} onPress={() => void choosePhoto()}>
+        {photo ? (
+          <Image source={{ uri: photo.uri }} style={styles.photoPickerImage} />
+        ) : (
+          <View style={styles.photoPickerEmpty}>
+            <UntitledIcon name="image" size={24} color={colors.accent} />
+            <Text style={styles.photoPickerLabel}>Choose one photo</Text>
+          </View>
+        )}
+      </Pressable>
+      {photo && (
+        <Pressable
+          style={styles.replacePhoto}
+          onPress={() => void choosePhoto()}
+        >
+          <Text style={styles.replacePhotoLabel}>Replace photo</Text>
+        </Pressable>
+      )}
       <View style={styles.locationPicker}>
         <Text style={styles.fieldLabel}>LOCATION</Text>
-        <View style={styles.iconTextRow}><UntitledIcon name="pin" size={17} color={colors.ink} /><Text style={styles.locationSelected}>{userCoordinate ? "Your current location" : "Location required"}</Text></View>
+        <View style={styles.iconTextRow}>
+          <UntitledIcon name="pin" size={17} color={colors.ink} />
+          <Text style={styles.locationSelected}>
+            {userCoordinate ? "Your current location" : "Location required"}
+          </Text>
+        </View>
         <Text style={styles.muted}>
           {userCoordinate
             ? "Exact location"
@@ -604,9 +814,9 @@ function PostCreateScreen({
       <Pressable
         style={[
           styles.primary,
-          (!caption.trim() || !userCoordinate || saving) && styles.disabled,
+          (!photo || !userCoordinate || saving) && styles.disabled,
         ]}
-        disabled={!caption.trim() || !userCoordinate || saving}
+        disabled={!photo || !userCoordinate || saving}
         onPress={() => void publish()}
       >
         <Text style={styles.primaryText}>
@@ -663,7 +873,10 @@ function AuthScreen({ onBack }: { onBack: () => void }) {
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back</Text></View>
+        <View style={styles.backRow}>
+          <UntitledIcon name="arrowLeft" size={18} color={colors.accent} />
+          <Text style={styles.back}>Back</Text>
+        </View>
       </Pressable>
       <Text style={styles.screenTitle}>
         {signingUp ? "Create your account" : "Sign in to Around"}
@@ -792,7 +1005,10 @@ function AuthGate({ onBack }: { onBack: () => void }) {
   return (
     <ScrollView style={styles.page} contentContainerStyle={styles.createForm}>
       <Pressable onPress={onBack}>
-        <View style={styles.backRow}><UntitledIcon name="arrowLeft" size={18} color={colors.accent} /><Text style={styles.back}>Back to map</Text></View>
+        <View style={styles.backRow}>
+          <UntitledIcon name="arrowLeft" size={18} color={colors.accent} />
+          <Text style={styles.back}>Back to map</Text>
+        </View>
       </Pressable>
       <Text style={styles.screenTitle}>
         {mode === "sign_up"
@@ -979,7 +1195,11 @@ function ExploreScreen({
         renderItem={({ item }) => (
           <Pressable style={styles.result} onPress={() => onOpen(item)}>
             <View style={styles.resultIcon}>
-              <UntitledIcon name={item.type === "event" ? "calendar" : "message"} size={20} color={colors.accent} />
+              <UntitledIcon
+                name={item.type === "event" ? "calendar" : "message"}
+                size={20}
+                color={colors.accent}
+              />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.resultTitle}>{item.title}</Text>
@@ -1085,7 +1305,11 @@ function BottomNav({
                 active === tab && styles.navItemActive,
               ]}
             >
-              <UntitledIcon name={icon} size={23} color={active === tab ? colors.accent : colors.muted} />
+              <UntitledIcon
+                name={icon}
+                size={23}
+                color={active === tab ? colors.accent : colors.muted}
+              />
               <Text
                 style={[styles.navLabel, active === tab && styles.navActive]}
               >
@@ -1120,18 +1344,22 @@ function Chip({
 }
 function DetailSheet({
   item,
+  canDelete,
   liked,
   saved,
   onClose,
   onLike,
   onSave,
+  onDelete,
 }: {
   item: ContentItem | null;
+  canDelete: boolean;
   liked: Set<string>;
   saved: Set<string>;
   onClose: () => void;
   onLike: (id: string) => void;
   onSave: (id: string) => void;
+  onDelete: () => void;
 }) {
   if (!item) return null;
   const status =
@@ -1151,13 +1379,38 @@ function DetailSheet({
       <Text style={styles.detailMeta}>
         {item.author} · {item.locationName} · {formatDistance(item.distanceM)}
       </Text>
+      {item.imageUrl && (
+        <Image source={{ uri: item.imageUrl }} style={styles.detailImage} />
+      )}
       <Text style={styles.detailBody}>{item.description}</Text>
       <View style={styles.detailActions}>
         <Pressable style={styles.detailAction} onPress={() => onLike(item.id)}>
-          <View style={styles.iconTextRow}><UntitledIcon name="heart" size={18} color={liked.has(item.id) ? colors.coral : colors.muted} /><Text style={liked.has(item.id) ? styles.actionActive : styles.action}>{item.likes + (liked.has(item.id) ? 1 : 0)}</Text></View>
+          <View style={styles.iconTextRow}>
+            <UntitledIcon
+              name="heart"
+              size={18}
+              color={liked.has(item.id) ? colors.coral : colors.muted}
+            />
+            <Text
+              style={liked.has(item.id) ? styles.actionActive : styles.action}
+            >
+              {item.likes + (liked.has(item.id) ? 1 : 0)}
+            </Text>
+          </View>
         </Pressable>
         <Pressable style={styles.detailAction} onPress={() => onSave(item.id)}>
-          <View style={styles.iconTextRow}><UntitledIcon name="bookmark" size={18} color={saved.has(item.id) ? colors.accent : colors.muted} /><Text style={saved.has(item.id) ? styles.actionActive : styles.action}>Save</Text></View>
+          <View style={styles.iconTextRow}>
+            <UntitledIcon
+              name="bookmark"
+              size={18}
+              color={saved.has(item.id) ? colors.accent : colors.muted}
+            />
+            <Text
+              style={saved.has(item.id) ? styles.actionActive : styles.action}
+            >
+              Save
+            </Text>
+          </View>
         </Pressable>
         <Pressable
           style={styles.detailAction}
@@ -1171,6 +1424,11 @@ function DetailSheet({
           <UntitledIcon name="more" size={20} color={colors.muted} />
         </Pressable>
       </View>
+      {canDelete && (
+        <Pressable style={styles.deleteActivity} onPress={onDelete}>
+          <Text style={styles.deleteActivityText}>Delete activity</Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -1212,6 +1470,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   mapWordmark: { width: 164, height: 55 },
+  searchThisArea: {
+    position: "absolute",
+    top: 78,
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderWidth: 1,
+    borderColor: "#f0e3e7",
+    borderRadius: 22,
+    paddingHorizontal: 17,
+    paddingVertical: 11,
+  },
+  searchThisAreaText: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: "800",
+  },
   mapGrid: {
     ...StyleSheet.absoluteFill,
     opacity: 0.38,
@@ -1437,7 +1711,12 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   createForm: { padding: 20, paddingBottom: 105 },
-  backRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 18 },
+  backRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 18,
+  },
   back: { color: colors.accent, fontWeight: "800" },
   input: {
     backgroundColor: colors.surface,
@@ -1450,6 +1729,25 @@ const styles = StyleSheet.create({
     marginTop: 18,
   },
   textarea: { minHeight: 110, textAlignVertical: "top", marginTop: 11 },
+  photoPicker: {
+    height: 190,
+    borderRadius: 14,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.surface,
+  },
+  photoPickerImage: { width: "100%", height: "100%" },
+  photoPickerEmpty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 9,
+    backgroundColor: colors.pale,
+  },
+  photoPickerLabel: { color: colors.accent, fontWeight: "800" },
+  replacePhoto: { alignSelf: "flex-start", paddingVertical: 11 },
+  replacePhotoLabel: { color: colors.accent, fontWeight: "800" },
   fieldLabel: {
     fontSize: 11,
     color: colors.muted,
@@ -1600,6 +1898,13 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   detailMeta: { color: colors.muted, marginTop: 6 },
+  detailImage: {
+    width: "100%",
+    height: 220,
+    borderRadius: 16,
+    marginTop: 16,
+    backgroundColor: colors.pale,
+  },
   detailBody: { color: colors.ink, lineHeight: 21, marginTop: 15 },
   detailActions: { flexDirection: "row", gap: 9, marginTop: 18 },
   detailAction: {
@@ -1609,6 +1914,8 @@ const styles = StyleSheet.create({
     borderRadius: 11,
     alignItems: "center",
   },
+  deleteActivity: { alignSelf: "center", paddingVertical: 14, marginTop: 5 },
+  deleteActivityText: { color: colors.coral, fontWeight: "800" },
   backdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,.28)",

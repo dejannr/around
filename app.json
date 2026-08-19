@@ -10,7 +10,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.around.app",
-      "infoPlist": { "NSLocationWhenInUseUsageDescription": "Around uses your location to show nearby activity. Your live location is never shared." }
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Around uses your location to show nearby activity. Your live location is never shared.",
+        "NSPhotoLibraryUsageDescription": "Around needs access to one photo for each activity you publish."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -32,14 +35,17 @@
           "locationWhenInUsePermission": "Around uses your location to show nearby activity. Your live location is never shared."
         }
       ],
-      "@rnmapbox/maps"
-    ],
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "expo-router",
-      "expo-secure-store"
+      "@rnmapbox/maps",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Around needs access to one photo for each activity you publish.",
+          "microphonePermission": false
+        }
+      ]
     ]
+    ,"web": {
+      "favicon": "./assets/favicon.png"
+    }
   }
 }
